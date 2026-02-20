@@ -108,13 +108,16 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
     let vw = vram.width;
     let vh = vram.height;
+
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
     fill_rect(&mut vram, 0xff0000, 32, 32, 32, 32).expect("fill_rect failed");
     fill_rect(&mut vram, 0x00ff00, 64, 64, 64, 64).expect("fill_rect failed");
     fill_rect(&mut vram, 0x0000ff, 128, 128, 128, 128).expect("fill_rect failed");
+
     for i in 0..256 {
         let _ = draw_point(&mut vram, 0x010101 * i as u32, i, i);
     }
+
     let grid_size: i64 = 32;
     let rect_size: i64 = grid_size * 8;
     for i in (0..=rect_size).step_by(grid_size as usize) {
@@ -129,6 +132,35 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         let _ = draw_line(&mut vram, 0xff00ff, cx, cy, rect_size, i);
         let _ = draw_line(&mut vram, 0xffffff, cx, cy, i, rect_size);
     }
+
+    let font_a = "
+........
+...##...
+...##...
+...##...
+...##...
+..#..#..
+..#..#..
+..#..#..
+..#..#..
+.######.
+.#....#.
+.#....#.
+.#....#.
+###..###
+........
+........
+";
+    for (y, row) in font_a.trim().split('\n').enumerate() {
+        for (x, pixel) in row.chars().enumerate() {
+            let color = match pixel {
+                '#' => 0xffffff,
+                _ => continue,
+            };
+            let _ = draw_point(&mut vram, color, x as i64, y as i64);
+        }
+    }
+
     loop {
         hlt()
     }
