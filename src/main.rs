@@ -133,32 +133,8 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         let _ = draw_line(&mut vram, 0xffffff, cx, cy, i, rect_size);
     }
 
-    let font_a = "
-........
-...##...
-...##...
-...##...
-...##...
-..#..#..
-..#..#..
-..#..#..
-..#..#..
-.######.
-.#....#.
-.#....#.
-.#....#.
-###..###
-........
-........
-";
-    for (y, row) in font_a.trim().split('\n').enumerate() {
-        for (x, pixel) in row.chars().enumerate() {
-            let color = match pixel {
-                '#' => 0xffffff,
-                _ => continue,
-            };
-            let _ = draw_point(&mut vram, color, x as i64, y as i64);
-        }
+    for (i, c) in "ABCDEF".chars().enumerate() {
+        draw_font_fg(&mut vram, 0xffffff, i as i64 * 16 + 256, i as i64 * 16 , c);
     }
 
     loop {
@@ -304,4 +280,36 @@ fn draw_line<T: Bitmap>(buf: &mut T, color: u32, x0: i64, y0: i64, x1: i64, y1: 
         }
     }
     Ok(())
+}
+
+fn draw_font_fg<T: Bitmap>(buf: &mut T, color: u32, x: i64, y: i64, c: char) {
+    if let Ok(_c) = u8::try_from(c) {
+        let font_a = "
+........
+...##...
+...##...
+...##...
+...##...
+..#..#..
+..#..#..
+..#..#..
+..#..#..
+.######.
+.#....#.
+.#....#.
+.#....#.
+###..###
+........
+........
+";
+        for (dy, row) in font_a.trim().split('\n').enumerate() {
+            for (dx, pixel) in row.chars().enumerate() {
+                let color = match pixel {
+                    '#' => color,
+                    _ => continue,
+                };
+                let _ = draw_point(buf, color, x + dx as i64, y + dy as i64);
+            }
+        }
+    }
 }
