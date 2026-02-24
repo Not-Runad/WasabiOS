@@ -102,6 +102,12 @@ impl MemoryMapHolder {
         MemoryMapIterator { map: self, ofs: 0 }
     }
 }
+impl Default for MemoryMapHolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct MemoryMapIterator<'a> {
     map: &'a MemoryMapHolder,
     ofs: usize,

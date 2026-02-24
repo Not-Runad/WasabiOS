@@ -2,7 +2,6 @@
 #![no_std]
 // #![feature(offset_of)]
 
-use core::arch::asm;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::writeln;
@@ -16,10 +15,9 @@ use wasabi::uefi::EfiMemoryType;
 use wasabi::uefi::EfiSystemTable;
 use wasabi::uefi::MemoryMapHolder;
 use wasabi::uefi::VramTextWriter;
-
-pub fn hlt() {
-    unsafe { asm!("hlt") }
-}
+use wasabi::qemu::exit_qemu;
+use wasabi::qemu::QemuExitCode;
+use wasabi::x86::hlt;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -41,7 +39,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     }
 
     // display memory maps
-    let mut memory_map = MemoryMapHolder::new();
+    let mut memory_map = MemoryMapHolder::default();
     let status = efi_system_table
         .boot_services()
         .get_memory_map(&mut memory_map);
@@ -73,7 +71,5 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        hlt()
-    }
+    exit_qemu(QemuExitCode::Fail)
 }
