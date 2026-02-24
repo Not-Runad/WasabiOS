@@ -144,6 +144,7 @@ pub enum EfiMemoryType {
 #[repr(C)]
 struct EfiBootServicesTable {
     _reserved0: [u64; 7],
+
     get_memory_map: extern "win64" fn(
         memory_map_size: *mut usize,
         memory_map: *mut u8,
@@ -151,7 +152,17 @@ struct EfiBootServicesTable {
         descriptor_size: *mut usize,
         descriptor_version: *mut u32,
     ) -> EfiStatus,
-    _reserved1: [u64; 32],
+
+    _reserved1: [u64; 21],
+
+    exit_boot_services:
+        extern "win64" fn(
+            image_handle: EfiHandle,
+            map_key: usize,
+    ) -> EfiStatus,
+
+    _reserved4: [u64; 10],
+
     locate_protocol: extern "win64" fn(
         protocol: *const EfiGuid,
         registration: *const EfiVoid,
@@ -160,6 +171,7 @@ struct EfiBootServicesTable {
 }
 const _: () = assert!(offset_of!(EfiBootServicesTable, get_memory_map) == 56);
 const _: () = assert!(offset_of!(EfiBootServicesTable, locate_protocol) == 320);
+const _: () = assert!(offset_of!(EfiBootServicesTable, exit_boot_services) == 232);
 impl EfiBootServicesTable {
     fn get_memory_map(&self, map: &mut MemoryMapHolder) -> EfiStatus {
         (self.get_memory_map)(
@@ -200,7 +212,7 @@ pub fn hlt() {
 }
 
 #[no_mangle]
-fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
+fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // init vram
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
     let vw = vram.width;
@@ -209,7 +221,7 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // background: black
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
     
-    // draw rectangles
+    // draw test pattern
     draw_test_pattern(&mut vram);
 
     // text writer test
@@ -239,6 +251,10 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         "Total: {total_memory_pages} pages = {total_memory_size_mib} MiB"
     )
     .unwrap();
+
+    // exit from efi boot services (Non-UEFI)
+    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map);
+    writeln!(w, "Hello, Non-UEFI space!").unwrap();
 
     loop {
         hlt()
@@ -477,5 +493,19 @@ impl fmt::Write for VramTextWriter<'_> {
             self.cursor_x += 8;
         }
         Ok(())
+    }
+}
+
+fn exit_from_efi_boot_services(image_handle: EfiHandle, efi_system_table: &EfiSystemTable, memory_map: &mut MemoryMapHolder) {
+    loop {
+        let status = efi_system_table.boot_services.get_memory_map(memory_map);
+        assert_eq!(status, EfiStatus::Success);
+        let status = (efi_system_table.boot_services.exit_boot_services)(
+            image_handle,
+            memory_map.map_key,
+        );
+        if status == EfiStatus::Success {
+            break;
+        }
     }
 }
