@@ -77,6 +77,9 @@ impl EfiMemoryDescriptor {
     pub fn number_of_pages(&self) -> u64 {
         self.number_of_pages
     }
+    pub fn physical_start(&self) -> u64 {
+        self.physical_start
+    }
 }
 
 const MEMORY_MAP_BUFFER_SIZE: usize = 0x8000;
@@ -162,11 +165,7 @@ pub struct EfiBootServicesTable {
 
     _reserved1: [u64; 21],
 
-    exit_boot_services:
-        extern "win64" fn(
-            image_handle: EfiHandle,
-            map_key: usize,
-    ) -> EfiStatus,
+    exit_boot_services: extern "win64" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
 
     _reserved4: [u64; 10],
 
@@ -283,14 +282,16 @@ impl fmt::Write for VramTextWriter<'_> {
     }
 }
 
-pub fn exit_from_efi_boot_services(image_handle: EfiHandle, efi_system_table: &EfiSystemTable, memory_map: &mut MemoryMapHolder) {
+pub fn exit_from_efi_boot_services(
+    image_handle: EfiHandle,
+    efi_system_table: &EfiSystemTable,
+    memory_map: &mut MemoryMapHolder,
+) {
     loop {
         let status = efi_system_table.boot_services.get_memory_map(memory_map);
         assert_eq!(status, EfiStatus::Success);
-        let status = (efi_system_table.boot_services.exit_boot_services)(
-            image_handle,
-            memory_map.map_key,
-        );
+        let status =
+            (efi_system_table.boot_services.exit_boot_services)(image_handle, memory_map.map_key);
         if status == EfiStatus::Success {
             break;
         }

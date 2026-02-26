@@ -4,10 +4,11 @@
 #![test_runner(crate::test_runner::test_runner)]
 #![reexport_test_harness_main = "run_unit_tests"]
 #![no_main]
+pub mod allocator;
 pub mod graphics;
+pub mod qemu;
 pub mod result;
 pub mod uefi;
-pub mod qemu;
 pub mod x86;
 
 #[cfg(test)]
