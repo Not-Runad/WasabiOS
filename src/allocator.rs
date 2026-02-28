@@ -20,6 +20,20 @@ pub fn round_up_to_nearest_pow2(v: usize) -> Result<usize> {
         .checked_shl(usize::BITS - v.wrapping_sub(1).leading_zeros())
         .ok_or("Out of range")
 }
+#[test_case]
+fn round_up_to_nearest_pow2_tests() {
+    assert_eq!(round_up_to_nearest_pow2(0), Err("Out of range"));
+    assert_eq!(round_up_to_nearest_pow2(1), Ok(1));
+    assert_eq!(round_up_to_nearest_pow2(2), Ok(2));
+    assert_eq!(round_up_to_nearest_pow2(3), Ok(4));
+    assert_eq!(round_up_to_nearest_pow2(4), Ok(4));
+    assert_eq!(round_up_to_nearest_pow2(5), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(6), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(7), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(8), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(9), Ok(16));
+    assert_eq!(round_up_to_nearest_pow2(9), Ok(16));
+}
 
 /// Vertical bar `|` represents the chunk that has a Header
 /// before: |-- prev -------|---- self ---------------
@@ -38,9 +52,7 @@ const _: () = assert!(HEADER_SIZE == 32);
 // Size of Header should be power of 2
 const _: () = assert!(HEADER_SIZE.count_ones() == 1);
 
-pub const LAYOUT_PAGE_4K: Layout = unsafe {
-    Layout::from_size_align_unchecked(4096, 4096)
-};
+pub const LAYOUT_PAGE_4K: Layout = unsafe { Layout::from_size_align_unchecked(4096, 4096) };
 
 impl Header {
     fn can_provide(&self, size: usize, align: usize) -> bool {
@@ -72,7 +84,7 @@ impl Header {
         // Adjust size and align
         let size = max(round_up_to_nearest_pow2(size).ok()?, HEADER_SIZE);
         let align = max(align, HEADER_SIZE);
-        
+
         // providable required area or not
         if self.is_allocated() || !self.can_provide(size, align) {
             None
