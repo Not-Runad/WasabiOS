@@ -8,14 +8,13 @@ use core::writeln;
 use wasabi::graphics::draw_test_pattern;
 use wasabi::graphics::fill_rect;
 use wasabi::graphics::Bitmap;
+use wasabi::init::init_basic_runtime;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
-use wasabi::uefi::exit_from_efi_boot_services;
 use wasabi::uefi::init_vram;
 use wasabi::uefi::EfiHandle;
 use wasabi::uefi::EfiMemoryType;
 use wasabi::uefi::EfiSystemTable;
-use wasabi::uefi::MemoryMapHolder;
 use wasabi::uefi::VramTextWriter;
 use wasabi::x86::hlt;
 
@@ -32,18 +31,12 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // draw test pattern
     draw_test_pattern(&mut vram);
 
-    // text writer test
+    // text writer to VRAM
     let mut w = VramTextWriter::new(&mut vram);
-    for i in 0..4 {
-        writeln!(&mut w, "i = {i}").unwrap();
-    }
 
-    // display memory maps
-    let mut memory_map = MemoryMapHolder::default();
-    let status = efi_system_table
-        .boot_services()
-        .get_memory_map(&mut memory_map);
-    writeln!(w, "{status:?}").unwrap();
+    // memory map
+    let memory_map = init_basic_runtime(image_handle, efi_system_table);
+
     // display only CONVENTIONAL_MEMORY(the area can be used for normal DRAM)
     let mut total_memory_pages = 0;
     for e in memory_map.iter() {
@@ -61,7 +54,6 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     .unwrap();
 
     // exit from efi boot services (Non-UEFI)
-    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map);
     writeln!(w, "Hello, Non-UEFI space!").unwrap();
 
     loop {
