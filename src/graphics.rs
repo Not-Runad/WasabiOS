@@ -115,7 +115,7 @@ fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
                 let mut font = [[['*'; 8]; 16]; 256];
                 let mut fi = FONT_SOURCE.split('\n');
                 while let Some(line) = fi.next() {
-                    if let Some(line) = line.strip_prefix("0x")  {
+                    if let Some(line) = line.strip_prefix("0x") {
                         if let Ok(idx) = u8::from_str_radix(line, 16) {
                             let mut glyph = [['*'; 8]; 16];
                             for (y, line) in fi.clone().take(16).enumerate() {
@@ -125,7 +125,7 @@ fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
                                     }
                                 }
                             }
-                            font [idx as usize] = glyph;
+                            font[idx as usize] = glyph;
                         }
                     }
                 }
