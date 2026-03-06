@@ -105,10 +105,10 @@ fn draw_line<T: Bitmap>(buf: &mut T, color: u32, x0: i64, y0: i64, x1: i64, y1: 
     Ok(())
 }
 
+#[allow(static_mut_refs)]
 fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
     const FONT_SOURCE: &str = include_str!("./font.txt");
     static mut FONT_CACHE: Option<[[[char; 8]; 16]; 256]> = None;
-
     if let Ok(c) = u8::try_from(c) {
         let font = unsafe {
             FONT_CACHE.get_or_insert_with(|| {

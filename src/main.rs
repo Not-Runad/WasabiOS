@@ -10,24 +10,34 @@ use wasabi::graphics::fill_rect;
 use wasabi::graphics::Bitmap;
 use wasabi::info;
 use wasabi::init::init_basic_runtime;
+use wasabi::init::init_paging;
 use wasabi::print::hexdump;
 use wasabi::println;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
 use wasabi::uefi::init_vram;
+use wasabi::uefi::locate_loaded_image_protocol;
 use wasabi::uefi::EfiHandle;
 use wasabi::uefi::EfiMemoryType;
 use wasabi::uefi::EfiSystemTable;
 use wasabi::uefi::VramTextWriter;
 use wasabi::warn;
+use wasabi::x86::flush_tlb;
 use wasabi::x86::hlt;
+use wasabi::x86::init_exceptions;
+use wasabi::x86::read_cr3;
+use wasabi::x86::trigger_debug_interrupt;
+use wasabi::x86::PageAttr;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
-    // Printers
     println!("Booting WasabiOS...");
     println!("image_handle: {:#018X}", image_handle);
     println!("efi_system_table: {:#p}", efi_system_table);
+    let loaded_image_protocol = locate_loaded_image_protocol(image_handle, efi_system_table)
+        .expect("Failed to get LoadedImageProtocol");
+    println!("image_base: {:#018X}", loaded_image_protocol.image_base);
+    println!("image_size: {:#018X}", loaded_image_protocol.image_size);
     info!("info");
     warn!("warn");
     error!("error");
@@ -80,6 +90,24 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     let t = t.and_then(|t| t.next_level(0));
     println!("{t:?}");
 
+    // Exception handler test (with INT3-Breakpoint)
+    let (_gdt, _idt) = init_exceptions();
+    info!("Exception initialized.");
+    trigger_debug_interrupt();
+    info!("Execution coninued.");
+
+    // Initialize page table from UEFI to original
+    init_paging(&memory_map);
+    info!("Now you are using your own page tables!");
+
+    // unmap page 0
+    let page_table = read_cr3();
+    unsafe {
+        (*page_table)
+            .create_mapping(0, 4096, 0, PageAttr::NotPresent)
+            .expect("Failed to unmap page 0");
+    }
+    flush_tlb();
 
     loop {
         hlt()

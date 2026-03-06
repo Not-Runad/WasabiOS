@@ -4,9 +4,11 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 Booting WasabiOS...
 image_handle: 0x00000000BEC4E498
 efi_system_table: 0x00000000bf9ee018
-[INFO] src/main.rs:31 : info
-[WARN] src/main.rs:32 : warn
-[ERROR] src/main.rs:33 : error
+image_base: 0x00000000BE31E000
+image_size: 0x000000000006D000
+[INFO] src/main.rs:41 : info
+[WARN] src/main.rs:42 : warn
+[ERROR] src/main.rs:43 : error
 00000000: 49 42 49 20 53 59 53 54 46 00 02 00 78 00 00 00 |IBI SYSTF...x...|
 00000010: F8 EB 8B D5 00 00 00 00 18 D8 92 BF 00 00 00 00 |................|
 00000020: 00 00 01 00 00 00 00 00 18 CE D8 BE 00 00 00 00 |................|
@@ -602,3 +604,28 @@ Some(L2Tabel @ 0x00000000bfc03000 {
 }
 )
 None
+[INFO] src/x86.rs:649: TSS64 created @ 0x13FF7FE80
+[INFO] src/x86.rs:247: Loading GDT @ 0x000000013FF7FE20
+[INFO] src/x86.rs:254: Loading TSS ( selector = 0x18 )
+[INFO] src/x86.rs:596: Loading IDT: IdtrParameters { limit: 4096, base: 0x13ff7ee00 }
+[INFO] src/main.rs:95 : Exception initialized.
+[ERROR] src/x86.rs:815: Interrupt info: {
+                rip: 0x00000000BE32B695, CS: 0x0008,
+                rsp: 0x00000000BFEB1380, SS: 0x0010,
+                rbp: 0x00000000BFEB1380,
+
+                rflags:     0x0000000000000002,
+                error_code: 0x0000000000000000,
+
+                rax: 0x00000000BE34CF00, rcx: 0x00000000BE34CFDE,
+                rdx: 0x3333333333333333, rbx: 0x00000000BE4E72C8,
+                rsi: 0x00000000BE632018, rdi: 0x00000000BE632018,
+                r8:  0x0000000000000000, r9:  0x00000000BE3591E0,
+                r10: 0x0000000000000019, r11: 0x00000000BE357100,
+                r12: 0x0000000000000000, r13: 0x0000000000000000,
+                r14: 0x00000000BE4E7218, r15: 0x0000000000000005,
+            }
+[ERROR] src/x86.rs:816: Exception 0x03: 
+[ERROR] src/x86.rs:819: Breakpoint
+[INFO] src/main.rs:97 : Execution coninued.
+[INFO] src/main.rs:101: Now you are using your own page tables!
