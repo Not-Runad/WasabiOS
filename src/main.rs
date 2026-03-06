@@ -1,5 +1,6 @@
 #![no_main]
 #![no_std]
+#![feature(offset_of)]
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
