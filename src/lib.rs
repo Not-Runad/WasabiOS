@@ -5,6 +5,7 @@
 #![no_main]
 #![feature(offset_of)]
 
+pub mod acpi;
 pub mod allocator;
 pub mod executor;
 pub mod graphics;

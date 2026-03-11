@@ -34,6 +34,7 @@ use wasabi::x86::PageAttr;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
+    // Show initalized info
     println!("Booting WasabiOS...");
     println!("image_handle: {:#018X}", image_handle);
     println!("efi_system_table: {:#p}", efi_system_table);
@@ -50,6 +51,11 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
     let vw = vram.width();
     let vh = vram.height();
+
+    // Get ACPI(Advanced Configuration and Power Interface)
+    let acpi = efi_system_table
+        .acpi_table()
+        .expect("ACPI table not found.");
 
     // background: black
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
@@ -113,7 +119,13 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     flush_tlb();
 
     // Async
-    let task1 = Task::new(async {
+    // Get HPET(High Precision Event Timer) from ACPI
+    let hpet = acpi.hpet().expect("Failed to get HPET from ACPI.");
+    let hpet = hpet
+        .base_address()
+        .expect("Failed to get HPET base address.");
+    info!("HPET is at {hpet:#018X}");
+    let task1 = Task::new(async move {
         for i in 100..=103 {
             info!("{i}");
             yield_execution().await;
