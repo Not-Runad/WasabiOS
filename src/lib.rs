@@ -6,6 +6,7 @@
 #![feature(offset_of)]
 
 pub mod allocator;
+pub mod executor;
 pub mod graphics;
 pub mod init;
 pub mod print;
