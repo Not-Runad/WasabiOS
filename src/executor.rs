@@ -108,7 +108,7 @@ impl Future for Yield {
     }
 }
 
-// apply polled-coordination
+/// apply polled-coordination
 pub async fn yield_execution() {
     Yield::default().await
 }
