@@ -4,12 +4,17 @@
 #![reexport_test_harness_main = "run_unit_tests"]
 #![no_main]
 #![feature(offset_of)]
+#![feature(sync_unsafe_cell)]
+#![feature(const_caller_location)]
+#![feature(const_location_fields)]
 
 pub mod acpi;
 pub mod allocator;
 pub mod executor;
 pub mod graphics;
+pub mod hpet;
 pub mod init;
+pub mod mutex;
 pub mod print;
 pub mod qemu;
 pub mod result;
