@@ -2,14 +2,19 @@ extern crate alloc;
 
 use crate::acpi::AcpiRsdpStruct;
 use crate::allocator::ALLOCATOR;
+use crate::graphics::draw_test_pattern;
+use crate::graphics::fill_rect;
+use crate::graphics::Bitmap;
 use crate::hpet::set_global_hpet;
 use crate::hpet::Hpet;
 use crate::info;
 use crate::uefi::exit_from_efi_boot_services;
 use crate::uefi::EfiHandle;
+use crate::uefi::EfiMemoryType;
 use crate::uefi::EfiMemoryType::*;
 use crate::uefi::EfiSystemTable;
 use crate::uefi::MemoryMapHolder;
+use crate::uefi::VramBufferInfo;
 use crate::x86::write_cr3;
 use crate::x86::PageAttr;
 use crate::x86::PAGE_SIZE;
@@ -17,6 +22,7 @@ use crate::x86::PML4;
 use alloc::boxed::Box;
 use core::cmp::max;
 
+/// Initialize basic runtime
 pub fn init_basic_runtime(
     image_handle: EfiHandle,
     efi_system_table: &EfiSystemTable,
@@ -27,6 +33,7 @@ pub fn init_basic_runtime(
     memory_map
 }
 
+/// Initialize paging
 pub fn init_paging(memory_map: &MemoryMapHolder) {
     let mut table = PML4::new();
     let mut end_of_mem = 0x1_0000_0000_u64;
@@ -42,9 +49,15 @@ pub fn init_paging(memory_map: &MemoryMapHolder) {
         }
     }
 
+    // initialize page mapping
     table
         .create_mapping(0, end_of_mem, 0, PageAttr::ReadWriteKernel)
         .expect("Failed to create initial page mapping.");
+
+    // unmap page 0 to detect null ptr dereference
+    table
+        .create_mapping(0, 4096, 0, PageAttr::NotPresent)
+        .expect("Failed to unmap page 0.");
 
     unsafe {
         write_cr3(Box::into_raw(table));
@@ -60,4 +73,28 @@ pub fn init_hpet(acpi: &AcpiRsdpStruct) {
     info!("HPET is at {hpet:#p}");
     let hpet = Hpet::new(hpet);
     set_global_hpet(hpet);
+}
+
+/// Initialize memory allocator
+pub fn init_allocator(memory_map: &MemoryMapHolder) {
+    let mut total_memory_pages = 0;
+    for e in memory_map.iter() {
+        if e.memory_type() != EfiMemoryType::CONVENTIONAL_MEMORY {
+            continue;
+        }
+        total_memory_pages += e.number_of_pages();
+        info!("{e:?}");
+    }
+    let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
+    info!("Total: {total_memory_pages} pages = {total_memory_size_mib} MiB");
+}
+
+/// Initialize display
+pub fn init_display(vram: &mut VramBufferInfo) {
+    let vw = vram.width();
+    let vh = vram.height();
+    // background: black
+    fill_rect(vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
+    // draw test pattern
+    draw_test_pattern(vram);
 }

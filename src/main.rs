@@ -10,12 +10,11 @@ use wasabi::error;
 use wasabi::executor::Executor;
 use wasabi::executor::Task;
 use wasabi::executor::TimeoutFuture;
-use wasabi::graphics::draw_test_pattern;
-use wasabi::graphics::fill_rect;
-use wasabi::graphics::Bitmap;
 use wasabi::hpet::global_timestamp;
 use wasabi::info;
+use wasabi::init::init_allocator;
 use wasabi::init::init_basic_runtime;
+use wasabi::init::init_display;
 use wasabi::init::init_hpet;
 use wasabi::init::init_paging;
 use wasabi::print::hexdump;
@@ -25,15 +24,10 @@ use wasabi::qemu::QemuExitCode;
 use wasabi::uefi::init_vram;
 use wasabi::uefi::locate_loaded_image_protocol;
 use wasabi::uefi::EfiHandle;
-use wasabi::uefi::EfiMemoryType;
 use wasabi::uefi::EfiSystemTable;
 use wasabi::uefi::VramTextWriter;
 use wasabi::warn;
-use wasabi::x86::flush_tlb;
 use wasabi::x86::init_exceptions;
-use wasabi::x86::read_cr3;
-use wasabi::x86::trigger_debug_interrupt;
-use wasabi::x86::PageAttr;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -50,21 +44,14 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     error!("error");
     hexdump(efi_system_table);
 
-    // Initialize VRAM
+    // Initialize VRAM and test it
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
-    let vw = vram.width();
-    let vh = vram.height();
+    init_display(&mut vram);
 
     // Get ACPI(Advanced Configuration and Power Interface)
     let acpi = efi_system_table
         .acpi_table()
         .expect("ACPI table not found.");
-
-    // background: black
-    fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
-
-    // draw test pattern
-    draw_test_pattern(&mut vram);
 
     // text writer to VRAM
     let mut w = VramTextWriter::new(&mut vram);
@@ -72,54 +59,17 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // memory map
     let memory_map = init_basic_runtime(image_handle, efi_system_table);
 
-    // display only CONVENTIONAL_MEMORY(the area can be used for normal DRAM)
-    let mut total_memory_pages = 0;
-    for e in memory_map.iter() {
-        if e.memory_type() != EfiMemoryType::CONVENTIONAL_MEMORY {
-            continue;
-        }
-        total_memory_pages += e.number_of_pages();
-        writeln!(w, "{e:?}").unwrap();
-    }
-    let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
-    writeln!(
-        w,
-        "Total: {total_memory_pages} pages = {total_memory_size_mib} MiB"
-    )
-    .unwrap();
-
     // exit from efi boot services (Non-UEFI)
     writeln!(w, "Entered Non-UEFI space!").unwrap();
-
-    let cr3 = wasabi::x86::read_cr3();
-    println!("cr3 = {cr3:#p}");
-    let t = Some(unsafe { &*cr3 });
-    println!("{t:?}");
-    let t = t.and_then(|t| t.next_level(0));
-    println!("{t:?}");
-    let t = t.and_then(|t| t.next_level(0));
-    println!("{t:?}");
-    let t = t.and_then(|t| t.next_level(0));
-    println!("{t:?}");
+    // display only CONVENTIONAL_MEMORY(the area can be used for normal DRAM)
+    init_allocator(&memory_map);
 
     // Exception handler test (with INT3-Breakpoint)
     let (_gdt, _idt) = init_exceptions();
-    info!("Exception initialized.");
-    trigger_debug_interrupt();
-    info!("Execution coninued.");
 
     // Initialize page table from UEFI to original
     init_paging(&memory_map);
     info!("Now you are using your own page tables!");
-
-    // unmap page 0 to detect null ptr dereference
-    let page_table = read_cr3();
-    unsafe {
-        (*page_table)
-            .create_mapping(0, 4096, 0, PageAttr::NotPresent)
-            .expect("Failed to unmap page 0");
-    }
-    flush_tlb();
 
     // Async
     init_hpet(acpi);
