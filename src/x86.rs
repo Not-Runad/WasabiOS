@@ -843,7 +843,7 @@ extern "sysv64" fn inthandler(info: &InterruptInfo, index: usize) {
                 } else {
                     "supervisor"
                 },
-                if info.error_code & 0b0001_000 != 0 {
+                if info.error_code & 0b0000_1000 != 0 {
                     "instruction fetch"
                 } else if info.error_code & 0b0010 != 0 {
                     "data write"

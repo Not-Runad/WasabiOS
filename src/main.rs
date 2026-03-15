@@ -2,15 +2,12 @@
 #![no_std]
 #![feature(offset_of)]
 
-use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::time::Duration;
-use core::writeln;
 use wasabi::error;
 use wasabi::executor::Executor;
 use wasabi::executor::Task;
 use wasabi::executor::TimeoutFuture;
-use wasabi::graphics::BitmapTextWriter;
 use wasabi::hpet::global_timestamp;
 use wasabi::info;
 use wasabi::init::init_allocator;
@@ -19,6 +16,7 @@ use wasabi::init::init_display;
 use wasabi::init::init_hpet;
 use wasabi::init::init_paging;
 use wasabi::print::hexdump;
+use wasabi::print::set_global_vram;
 use wasabi::println;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
@@ -53,15 +51,16 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         .acpi_table()
         .expect("ACPI table not found.");
 
-    // text writer to VRAM
-    let mut w = BitmapTextWriter::new(&mut vram);
+    // set global VRAM
+    set_global_vram(vram);
 
     // memory map
     let memory_map = init_basic_runtime(image_handle, efi_system_table);
 
     // exit from efi boot services (Non-UEFI)
-    writeln!(w, "Entered Non-UEFI space!").unwrap();
-    // display only CONVENTIONAL_MEMORY(the area can be used for normal DRAM)
+    info!("Entered Non-UEFI space!");
+
+    // Initialize memory allocator
     init_allocator(&memory_map);
 
     // Exception handler test (with INT3-Breakpoint)
