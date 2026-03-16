@@ -98,3 +98,14 @@ pub fn init_display(vram: &mut VramBufferInfo) {
     // draw test pattern
     draw_test_pattern(vram);
 }
+
+/// Initialize PCI
+pub fn init_pci(acpi: &AcpiRsdpStruct) {
+    if let Some(mcfg) = acpi.mcfg() {
+        for i in 0..mcfg.num_of_entries() {
+            if let Some(e) = mcfg.entry(i) {
+                info!("{e}")
+            }
+        }
+    }
+}

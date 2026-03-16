@@ -15,11 +15,13 @@ use wasabi::init::init_basic_runtime;
 use wasabi::init::init_display;
 use wasabi::init::init_hpet;
 use wasabi::init::init_paging;
+use wasabi::init::init_pci;
 use wasabi::print::hexdump;
 use wasabi::print::set_global_vram;
 use wasabi::println;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
+use wasabi::serial::SerialPort;
 use wasabi::uefi::init_vram;
 use wasabi::uefi::locate_loaded_image_protocol;
 use wasabi::uefi::EfiHandle;
@@ -56,11 +58,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     // memory map
     let memory_map = init_basic_runtime(image_handle, efi_system_table);
-
-    // exit from efi boot services (Non-UEFI)
     info!("Entered Non-UEFI space!");
-
-    // Initialize memory allocator
     init_allocator(&memory_map);
 
     // Exception handler test (with INT3-Breakpoint)
@@ -68,12 +66,13 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     // Initialize page table from UEFI to original
     init_paging(&memory_map);
-    info!("Now you are using your own page tables!");
 
-    // Async
+    // Task process
     init_hpet(acpi);
+    init_pci(acpi);
     let t0 = global_timestamp();
 
+    // create tasks
     let task1 = Task::new(async move {
         for i in 100..=103 {
             info!("{i} hpet.main_counter = {:?}", global_timestamp() - t0);
@@ -90,11 +89,27 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         }
         Ok(())
     });
+    let serial_task = Task::new(async {
+        let sp = SerialPort::default();
+        if let Err(e) = sp.loopback_test() {
+            error!("{e:?}");
+            return Err("serial: loopback test failed.");
+        }
+        info!("Started to monitor serial port.");
+        loop {
+            // Get value
+            if let Some(v) = sp.try_read() {
+                let c = char::from_u32(v as u32);
+                info!("Serial input: {v:#04X} = {c:?}");
+            }
+            TimeoutFuture::new(Duration::from_millis(20)).await;
+        }
+    });
 
     let mut executor = Executor::new();
-
     executor.enqueue(task1);
     executor.enqueue(task2);
+    executor.enqueue(serial_task);
     Executor::run(executor)
 }
 

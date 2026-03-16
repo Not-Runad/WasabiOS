@@ -1,3 +1,4 @@
+use crate::result::Result;
 use crate::x86::busy_loop_hint;
 use crate::x86::read_io_port_u8;
 use crate::x86::write_io_port_u8;
@@ -5,6 +6,14 @@ use core::fmt;
 
 // c.f. https://wiki.osdev.org/Serial_Ports
 
+/// # Resister mapped to this port
+/// +0: Read/Write(Receive/Transmit) buffer\
+/// +1: Intterrupt Enable Register\
+/// +2: FIFO control registers\
+/// +3: Line Control Register\
+/// +4: Modem Control Register\
+/// +5: Line Status Register\
+/// [...]
 pub struct SerialPort {
     base: u16,
 }
@@ -53,6 +62,33 @@ impl SerialPort {
         for _ in 0..slen {
             self.send_char(sc.next().unwrap());
         }
+    }
+
+    pub fn try_read(&self) -> Option<u8> {
+        if read_io_port_u8(self.base + 5) & 0x01 == 0 {
+            None
+        } else {
+            let c = read_io_port_u8(self.base);
+            // Enable FIFO, clear them, with 14-byte threshold
+            write_io_port_u8(self.base + 2, 0xc7);
+            Some(c)
+        }
+    }
+
+    pub fn loopback_test(&self) -> Result<()> {
+        // Set in loopback mode(0x1e)
+        write_io_port_u8(self.base + 4, 0x1e);
+        self.send_char('T');
+        if self
+            .try_read()
+            .ok_or("loopback_test failed: No Responce.")?
+            != b'T'
+        {
+            return Err("loopback_test failed: Wrong data received.");
+        }
+        // Return to the normal mode(0x0f)
+        write_io_port_u8(self.base + 4, 0x0f);
+        Ok(())
     }
 }
 impl Default for SerialPort {
