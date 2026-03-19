@@ -7,6 +7,7 @@
 #![feature(sync_unsafe_cell)]
 #![feature(const_caller_location)]
 #![feature(const_location_fields)]
+#![feature(option_get_or_insert_default)]
 
 pub mod acpi;
 pub mod allocator;

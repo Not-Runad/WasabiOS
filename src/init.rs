@@ -37,7 +37,7 @@ pub fn init_basic_runtime(
 /// Initialize paging
 pub fn init_paging(memory_map: &MemoryMapHolder) {
     let mut table = PML4::new();
-    let mut end_of_mem = 0x1_0000_0000_u64;
+    let mut end_of_mem = 0x0001_0000_0000_u64;
     for e in memory_map.iter() {
         match e.memory_type() {
             CONVENTIONAL_MEMORY | LOADER_CODE | LOADER_DATA => {

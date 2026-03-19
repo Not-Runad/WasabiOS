@@ -36,10 +36,10 @@ pub const KERNEL_CS: u16 = 1 << 3;
 pub const KERNEL_DS: u16 = 2 << 3;
 pub const TSS64_SEL: u16 = 3 << 3;
 
-pub type PT = Table<1, 12, [u8; PAGE_SIZE]>;
-pub type PD = Table<2, 21, PT>;
-pub type PDPT = Table<3, 30, PD>;
-pub type PML4 = Table<3, 39, PDPT>;
+pub type PT = Table<1, [u8; PAGE_SIZE]>;
+pub type PD = Table<2, PT>;
+pub type PDPT = Table<3, PD>;
+pub type PML4 = Table<3, PDPT>;
 
 // SDM Vol.3: 6.14.2 64-Bit Mode Stack Frame
 // In IA-32e mode, the RSP is aligned to a 16-byte boundary
@@ -116,28 +116,39 @@ impl PML4 {
         phys: u64,
         attr: PageAttr,
     ) -> Result<()> {
-        if virt_start & ATTR_MASK != 0 {
-            return Err("Invalid virt_start");
-        }
-        if virt_end & ATTR_MASK != 0 {
-            return Err("Invalid virt_end");
-        }
-        if phys & ATTR_MASK != 0 {
-            return Err("Invalid phys");
-        }
-
-        for addr in (virt_start..virt_end).step_by(PAGE_SIZE) {
-            let index = self.calc_index(addr);
-            let table = self.entry[index].ensure_populated()?.table_mut()?;
+        let table = self;
+        let mut addr = virt_start;
+        loop {
             let index = table.calc_index(addr);
             let table = table.entry[index].ensure_populated()?.table_mut()?;
-            let index = table.calc_index(addr);
-            let table = table.entry[index].ensure_populated()?.table_mut()?;
-            let index = table.calc_index(addr);
-            let pte = &mut table.entry[index];
-            pte.set_page(phys + addr - virt_start, attr)?;
+            loop {
+                let index = table.calc_index(addr);
+                let table = table.entry[index].ensure_populated()?.table_mut()?;
+                loop {
+                    let index = table.calc_index(addr);
+                    let table = table.entry[index].ensure_populated()?.table_mut()?;
+                    loop {
+                        let index = table.calc_index(addr);
+                        let pte = &mut table.entry[index];
+                        let phys_addr = phys + addr - virt_start;
+                        pte.set_page(phys_addr, attr)?;
+                        addr = addr.wrapping_add(PAGE_SIZE as u64);
+                        if index + 1 >= (1 << 9) || addr >= virt_end {
+                            break;
+                        }
+                    }
+                    if index + 1 >= (1 << 9) || addr >= virt_end {
+                        break;
+                    }
+                }
+                if index + 1 >= (1 << 9) || addr >= virt_end {
+                    break;
+                }
+            }
+            if index + 1 >= (1 << 9) || addr >= virt_end {
+                break;
+            }
         }
-
         Ok(())
     }
 }
@@ -275,11 +286,11 @@ impl Default for GdtWrapper {
 }
 
 #[repr(transparent)]
-pub struct Entry<const LEVEL: usize, const SHIFT: usize, NEXT> {
+pub struct Entry<const LEVEL: usize, NEXT> {
     value: u64,
     next_type: PhantomData<NEXT>,
 }
-impl<const LEVEL: usize, const SHIFT: usize, NEXT> Entry<LEVEL, SHIFT, NEXT> {
+impl<const LEVEL: usize, NEXT> Entry<LEVEL, NEXT> {
     fn read_value(&self) -> u64 {
         self.value
     }
@@ -353,22 +364,22 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> Entry<LEVEL, SHIFT, NEXT> {
         }
     }
 }
-impl<const LEVEL: usize, const SHIFT: usize, NEXT> fmt::Display for Entry<LEVEL, SHIFT, NEXT> {
+impl<const LEVEL: usize, NEXT> fmt::Display for Entry<LEVEL, NEXT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format(f)
     }
 }
-impl<const LEVEL: usize, const SHIFT: usize, NEXT> fmt::Debug for Entry<LEVEL, SHIFT, NEXT> {
+impl<const LEVEL: usize, NEXT> fmt::Debug for Entry<LEVEL, NEXT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format(f)
     }
 }
 
 #[repr(align(4096))]
-pub struct Table<const LELEL: usize, const SHIFT: usize, NEXT> {
-    entry: [Entry<LELEL, SHIFT, NEXT>; 512],
+pub struct Table<const LEVEL: usize, NEXT> {
+    entry: [Entry<LEVEL, NEXT>; 512],
 }
-impl<const LEVEL: usize, const SHIFT: usize, NEXT: fmt::Debug> Table<LEVEL, SHIFT, NEXT> {
+impl<const LEVEL: usize, NEXT: fmt::Debug> Table<LEVEL, NEXT> {
     fn format(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "L{}Tabel @ {:#p} {{", LEVEL, self)?;
         for i in 0..512 {
@@ -381,16 +392,20 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT: fmt::Debug> Table<LEVEL, SHIF
         writeln!(f, "}}")
     }
 
+    const fn index_shift() -> usize {
+        (LEVEL - 1) * 9 + 12
+    }
+
     pub fn next_level(&self, index: usize) -> Option<&NEXT> {
         self.entry.get(index).and_then(|e| e.table().ok())
     }
 
     fn calc_index(&self, addr: u64) -> usize {
-        ((addr >> SHIFT) & 0b1_1111_1111) as usize
+        ((addr >> Self::index_shift()) & 0b0001_1111_1111) as usize
     }
 }
-impl<const LEVEL: usize, const SHIFT: usize, NEXT: fmt::Debug> fmt::Debug
-    for Table<LEVEL, SHIFT, NEXT>
+impl<const LEVEL: usize, NEXT: fmt::Debug> fmt::Debug
+    for Table<LEVEL, NEXT>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format(f)
