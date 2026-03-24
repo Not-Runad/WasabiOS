@@ -1,11 +1,16 @@
 use crate::acpi::AcpiMcfgDescriptor;
+use crate::error;
 use crate::info;
 use crate::result::Result;
+use crate::x86::with_current_page_table;
+use crate::x86::PageAttr;
+use crate::xhci::PciXhciDriver;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::read_volatile;
+use core::ptr::write_volatile;
 
 const MASK_BUS: usize = 0xff00;
 const SHIFT_BUS: usize = 8;
@@ -120,6 +125,52 @@ impl<T> ConfigRegisters<T> {
             Ok(unsafe { read_volatile(ecm_base.add(byte_offset / size_of::<T>())) })
         }
     }
+
+    fn write(ecm_base: *mut T, byte_offset: usize, data: T) -> Result<()> {
+        if !(0..256).contains(&byte_offset) || byte_offset % size_of::<T>() != 0 {
+            Err("PCI ConfigRegisters write out of range.")
+        } else {
+            unsafe {
+                write_volatile(ecm_base.add(byte_offset / size_of::<T>()), data);
+            }
+            Ok(())
+        }
+    }
+}
+
+pub struct BarMem64 {
+    addr: *mut u8,
+    size: u64,
+}
+impl BarMem64 {
+    pub fn addr(&self) -> *mut u8 {
+        self.addr
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn disable_cache(&self) {
+        let vstart = self.addr() as u64;
+        let vend = self.addr() as u64 + self.size();
+        unsafe {
+            with_current_page_table(|pt| {
+                pt.create_mapping(vstart, vend, vstart, PageAttr::ReadWriteIo)
+                    .expect("Failed to create mapping.")
+            })
+        }
+    }
+}
+impl fmt::Debug for BarMem64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "BarMem64[{:#018X}..{:#018X}]",
+            self.addr as u64,
+            self.addr as u64 + self.size()
+        )
+    }
 }
 
 pub struct Pci {
@@ -148,7 +199,7 @@ impl Pci {
         ConfigRegisters::read(self.ecm_base(bus_device_function), byte_offset)
     }
 
-    pub fn read_vendor_id_and_device_id(
+    pub fn read_vendor_device_id(
         &self,
         bus_device_function: BusDeviceFunction,
     ) -> Option<VendorDeviceId> {
@@ -164,9 +215,94 @@ impl Pci {
 
     pub fn probe_devices(&self) {
         for bus_device_function in BusDeviceFunction::iter() {
-            if let Some(vdid) = self.read_vendor_id_and_device_id(bus_device_function) {
-                info!("{vdid}");
+            if let Some(vendor_device_id) = self.read_vendor_device_id(bus_device_function) {
+                info!("{vendor_device_id}");
+                if PciXhciDriver::supports(vendor_device_id) {
+                    if let Err(e) = PciXhciDriver::attach(self, bus_device_function) {
+                        error!("PCI: driver attach() failed: {e:?}")
+                    } else {
+                        continue;
+                    }
+                }
             }
         }
+    }
+
+    pub fn read_register_u32(
+        &self,
+        bus_device_function: BusDeviceFunction,
+        byte_offset: usize,
+    ) -> Result<u32> {
+        ConfigRegisters::read(self.ecm_base(bus_device_function), byte_offset)
+    }
+
+    pub fn write_register_u32(
+        &self,
+        bus_device_function: BusDeviceFunction,
+        byte_offset: usize,
+        data: u32,
+    ) -> Result<()> {
+        ConfigRegisters::write(self.ecm_base(bus_device_function), byte_offset, data)
+    }
+
+    pub fn read_register_u64(
+        &self,
+        bus_device_function: BusDeviceFunction,
+        byte_offset: usize,
+    ) -> Result<u64> {
+        let lo = self.read_register_u32(bus_device_function, byte_offset)?;
+        let hi = self.read_register_u32(bus_device_function, byte_offset + 4)?;
+        Ok(((hi as u64) << 32) | (lo as u64))
+    }
+
+    pub fn write_register_u64(
+        &self,
+        bus_device_function: BusDeviceFunction,
+        byte_offset: usize,
+        data: u64,
+    ) -> Result<()> {
+        let lo: u32 = data as u32;
+        let hi: u32 = (data >> 32) as u32;
+        self.write_register_u32(bus_device_function, byte_offset, lo)?;
+        self.write_register_u32(bus_device_function, byte_offset + 4, hi)?;
+        Ok(())
+    }
+
+    pub fn try_bar0_mem64(&self, bus_device_function: BusDeviceFunction) -> Result<BarMem64> {
+        let bar0 = self.read_register_u64(bus_device_function, 0x10)?;
+        if bar0 & 0b0111 == 0b0100 {
+            // Memory, 64bit, and Non-prefetchable
+            let addr = (bar0 & !0b1111) as *mut u8;
+            // Write all-1s to get the size of the region
+            self.write_register_u64(bus_device_function, 0x10, !0_u64)?;
+            let size = 1 + !(self.read_register_u64(bus_device_function, 0x10)? & !0b1111);
+            // Restore the original value
+            self.write_register_u64(bus_device_function, 0x10, bar0)?;
+            Ok(BarMem64 { addr, size })
+        } else {
+            Err("Unexpected BAR0 type.")
+        }
+    }
+
+    pub fn set_command_and_status_flags(
+        &self,
+        bus_device_function: BusDeviceFunction,
+        flags: u32,
+    ) -> Result<()> {
+        let cmd_and_status =
+            self.read_register_u32(bus_device_function, 0x04 /* Command and status */)?;
+        self.write_register_u32(
+            bus_device_function,
+            0x04, /* Command and status */
+            flags | cmd_and_status,
+        )
+    }
+
+    pub fn enable_bus_master(&self, bus_device_function: BusDeviceFunction) -> Result<()> {
+        self.set_command_and_status_flags(bus_device_function, 1 << 2 /* Bus Master enable */)
+    }
+
+    pub fn disable_interrupt(&self, bus_device_function: BusDeviceFunction) -> Result<()> {
+        self.set_command_and_status_flags(bus_device_function, 1 << 10 /* Interrupt disable */)
     }
 }

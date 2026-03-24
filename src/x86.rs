@@ -11,6 +11,7 @@ use core::marker::PhantomData;
 use core::mem::offset_of;
 use core::mem::size_of;
 use core::mem::size_of_val;
+use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 
@@ -39,7 +40,7 @@ pub const TSS64_SEL: u16 = 3 << 3;
 pub type PT = Table<1, [u8; PAGE_SIZE]>;
 pub type PD = Table<2, PT>;
 pub type PDPT = Table<3, PD>;
-pub type PML4 = Table<3, PDPT>;
+pub type PML4 = Table<4, PDPT>;
 
 // SDM Vol.3: 6.14.2 64-Bit Mode Stack Frame
 // In IA-32e mode, the RSP is aligned to a 16-byte boundary
@@ -404,9 +405,7 @@ impl<const LEVEL: usize, NEXT: fmt::Debug> Table<LEVEL, NEXT> {
         ((addr >> Self::index_shift()) & 0b0001_1111_1111) as usize
     }
 }
-impl<const LEVEL: usize, NEXT: fmt::Debug> fmt::Debug
-    for Table<LEVEL, NEXT>
-{
+impl<const LEVEL: usize, NEXT: fmt::Debug> fmt::Debug for Table<LEVEL, NEXT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format(f)
     }
@@ -727,6 +726,33 @@ pub fn flush_tlb() {
     unsafe {
         write_cr3(read_cr3());
     }
+}
+
+/// # Safety
+/// This will create a mutable reference to the page table structure
+/// So is is programmer's responsibility to ensure that at most one
+/// instance of the reference exist at every moment.
+pub unsafe fn take_current_page_table() -> ManuallyDrop<Box<PML4>> {
+    ManuallyDrop::new(Box::from_raw(read_cr3()))
+}
+
+/// # Safety
+/// This function sets the CR3 value so that anything bad can happen.
+pub unsafe fn put_current_page_table(mut table: ManuallyDrop<Box<PML4>>) {
+    // Set CR3 t oreflect the updates and drop TLB chaches.
+    write_cr3(Box::into_raw(ManuallyDrop::take(&mut table)))
+}
+
+/// # Safety
+/// This function modifies the page table as callback does, so
+/// anything bad can happen if there are some mistakes.
+pub unsafe fn with_current_page_table<F>(callback: F)
+where
+    F: FnOnce(&mut PML4),
+{
+    let mut table = take_current_page_table();
+    callback(&mut table);
+    put_current_page_table(table)
 }
 
 /// # Safety
