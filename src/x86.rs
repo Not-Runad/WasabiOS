@@ -2,6 +2,7 @@ extern crate alloc;
 
 use crate::error;
 use crate::info;
+use crate::mmio::IoBox;
 use crate::result::Result;
 use alloc::boxed::Box;
 use core::arch::asm;
@@ -112,13 +113,13 @@ impl PML4 {
 
     pub fn create_mapping(
         &mut self,
-        virt_start: u64,
-        virt_end: u64,
-        phys: u64,
+        vstart: u64,
+        vend: u64,
+        pstart: u64,
         attr: PageAttr,
     ) -> Result<()> {
         let table = self;
-        let mut addr = virt_start;
+        let mut addr = vstart;
         loop {
             let index = table.calc_index(addr);
             let table = table.entry[index].ensure_populated()?.table_mut()?;
@@ -131,22 +132,22 @@ impl PML4 {
                     loop {
                         let index = table.calc_index(addr);
                         let pte = &mut table.entry[index];
-                        let phys_addr = phys + addr - virt_start;
+                        let phys_addr = pstart + addr - vstart;
                         pte.set_page(phys_addr, attr)?;
                         addr = addr.wrapping_add(PAGE_SIZE as u64);
-                        if index + 1 >= (1 << 9) || addr >= virt_end {
+                        if index + 1 >= (1 << 9) || addr >= vend {
                             break;
                         }
                     }
-                    if index + 1 >= (1 << 9) || addr >= virt_end {
+                    if index + 1 >= (1 << 9) || addr >= vend {
                         break;
                     }
                 }
-                if index + 1 >= (1 << 9) || addr >= virt_end {
+                if index + 1 >= (1 << 9) || addr >= vend {
                     break;
                 }
             }
-            if index + 1 >= (1 << 9) || addr >= virt_end {
+            if index + 1 >= (1 << 9) || addr >= vend {
                 break;
             }
         }
@@ -164,9 +165,9 @@ pub enum PageAttr {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TranslationResult {
-    PageMapped4K { phys: u64 },
-    PageMapped2M { phys: u64 },
-    PageMapped1G { phys: u64 },
+    PageMapped4K { pstart: u64 },
+    PageMapped2M { pstart: u64 },
+    PageMapped1G { pstart: u64 },
 }
 
 #[repr(u8)]
@@ -338,11 +339,11 @@ impl<const LEVEL: usize, NEXT> Entry<LEVEL, NEXT> {
         }
     }
 
-    fn set_page(&mut self, phys: u64, attr: PageAttr) -> Result<()> {
-        if phys & ATTR_MASK != 0 {
-            Err("phys is not aligned")
+    fn set_page(&mut self, pstart: u64, attr: PageAttr) -> Result<()> {
+        if pstart & ATTR_MASK != 0 {
+            Err("pstart is not aligned")
         } else {
-            self.value = phys | attr as u64;
+            self.value = pstart | attr as u64;
             Ok(())
         }
     }
@@ -753,6 +754,18 @@ where
     let mut table = take_current_page_table();
     callback(&mut table);
     put_current_page_table(table)
+}
+
+pub fn disable_cache<T: Sized>(io_box: &IoBox<T>) {
+    let region = io_box.as_ref();
+    let vstart = region as *const T as u64;
+    let vend = vstart + size_of_val(region) as u64;
+    unsafe {
+        with_current_page_table(|pt| {
+            pt.create_mapping(vstart, vend, vstart, PageAttr::ReadWriteIo)
+                .expect("Failed to create mapping.")
+        });
+    }
 }
 
 /// # Safety
