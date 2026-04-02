@@ -3,6 +3,7 @@ extern crate alloc;
 use crate::allocator::ALLOCATOR;
 use crate::bits::extract_bits;
 use crate::executor::spawn_global;
+use crate::executor::yield_execution;
 use crate::info;
 use crate::mmio::IoBox;
 use crate::mmio::Mmio;
@@ -15,6 +16,9 @@ use crate::result::Result;
 use crate::volatile::Volatile;
 use crate::x86::busy_loop_hint;
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::rc::Rc;
+use alloc::rc::Weak;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::cmp::max;
@@ -22,6 +26,7 @@ use core::marker::PhantomPinned;
 use core::mem::size_of;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
+use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use core::slice;
 
@@ -46,7 +51,7 @@ enum TrbType {
     HostControllerEvent = 37,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 #[repr(C, align(16))]
 struct GenericTrbEntry {
     data: Volatile<u64>,
@@ -55,6 +60,22 @@ struct GenericTrbEntry {
 }
 const _: () = assert!(size_of::<GenericTrbEntry>() == 16);
 impl GenericTrbEntry {
+    fn data(&self) -> u64 {
+        self.data.read()
+    }
+
+    fn slot_id(&self) -> u8 {
+        self.control.read_bits(24, 8).try_into().unwrap()
+    }
+
+    fn trb_type(&self) -> u32 {
+        self.control.read_bits(10, 6)
+    }
+
+    fn cycle_state(&self) -> bool {
+        self.control.read_bits(0, 1) != 0
+    }
+
     fn set_trb_type(&mut self, trb_type: TrbType) {
         self.control.write_bits(10, 6, trb_type as u32).unwrap()
     }
@@ -83,12 +104,33 @@ struct TrbRing {
 const _: () = assert!(size_of::<TrbRing>() <= 4096);
 impl TrbRing {
     const NUM_TRB: usize = 16;
+
+    fn current_index(&self) -> usize {
+        self.current_index
+    }
+
     fn new() -> IoBox<Self> {
         IoBox::new()
     }
 
     const fn num_trbs(&self) -> usize {
         Self::NUM_TRB
+    }
+
+    fn phys_addr(&self) -> u64 {
+        &self.trb[0] as *const GenericTrbEntry as u64
+    }
+
+    fn trb(&self, index: usize) -> GenericTrbEntry {
+        unsafe { read_volatile(&self.trb[index]) }
+    }
+
+    fn current(&self) -> GenericTrbEntry {
+        self.trb(self.current_index)
+    }
+
+    fn current_ptr(&self) -> usize {
+        &self.trb[self.current_index] as *const GenericTrbEntry as usize
     }
 
     fn write(&mut self, index: usize, trb: GenericTrbEntry) -> Result<()> {
@@ -102,8 +144,12 @@ impl TrbRing {
         }
     }
 
-    fn phys_addr(&self) -> u64 {
-        &self.trb[0] as *const GenericTrbEntry as u64
+    fn advance_index_notoggle(&mut self, cycle_ours: bool) -> Result<()> {
+        if self.current().cycle_state() != cycle_ours {
+            return Err("Cycle state mismatch.");
+        }
+        self.current_index = (self.current_index + 1) % self.trb.len();
+        Ok(())
     }
 }
 
@@ -155,11 +201,52 @@ impl EventRingSegmentTableEntry {
     }
 }
 
+#[derive(Debug)]
+struct EventWaitCond {
+    trb_type: Option<TrbType>,
+    trb_addr: Option<u64>,
+    slot: Option<u8>,
+}
+
+#[derive(Debug)]
+struct EventWaitInfo {
+    cond: EventWaitCond,
+    trbs: Mutex<VecDeque<GenericTrbEntry>>,
+}
+impl EventWaitInfo {
+    fn matches(&self, trb: &GenericTrbEntry) -> bool {
+        if let Some(trb_type) = self.cond.trb_type {
+            if trb.trb_type() != trb_type as u32 {
+                return false;
+            }
+        }
+        if let Some(slot) = self.cond.slot {
+            if trb.slot_id() != slot {
+                return false;
+            }
+        }
+        if let Some(trb_addr) = self.cond.trb_addr {
+            if trb.data() != trb_addr {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn resolve(&self, trb: &GenericTrbEntry) -> Result<()> {
+        self.trbs.under_locked(&|trbs| -> Result<()> {
+            trbs.push_back(trb.clone());
+            Ok(())
+        })
+    }
+}
+
 struct EventRing {
     ring: IoBox<TrbRing>,
     erst: IoBox<EventRingSegmentTableEntry>,
-    _cycle_state_ours: bool,
+    cycle_state_ours: bool,
     erdp: Option<*mut u64>,
+    wait_list: VecDeque<Weak<EventWaitInfo>>,
 }
 impl EventRing {
     fn new() -> Result<Self> {
@@ -168,8 +255,9 @@ impl EventRing {
         Ok(Self {
             ring,
             erst,
-            _cycle_state_ours: true,
+            cycle_state_ours: true,
             erdp: None,
+            wait_list: Default::default(),
         })
     }
 
@@ -183,6 +271,64 @@ impl EventRing {
 
     fn erst_phys_addr(&self) -> u64 {
         self.erst.as_ref() as *const EventRingSegmentTableEntry as u64
+    }
+
+    fn has_next_event(&self) -> bool {
+        self.ring.as_ref().current().cycle_state() == self.cycle_state_ours
+    }
+
+    /// Non-blocking
+    fn pop(&mut self) -> Result<Option<GenericTrbEntry>> {
+        if !self.has_next_event() {
+            return Ok(None);
+        }
+        let e = self.ring.as_ref().current();
+        let eptr = self.ring.as_ref().current_ptr() as u64;
+        unsafe { self.ring.get_unchecked_mut() }.advance_index_notoggle(self.cycle_state_ours)?;
+        unsafe {
+            let erdp = self.erdp.expect("erpd is no set");
+            write_volatile(erdp, eptr | (*erdp & 0b1111));
+        }
+        if self.ring.as_ref().current_index() == 0 {
+            self.cycle_state_ours = !self.cycle_state_ours;
+        }
+        Ok(Some(e))
+    }
+
+    async fn poll(&mut self) -> Result<()> {
+        if let Some(e) = self.pop()? {
+            let mut consumed = false;
+            for w in &self.wait_list {
+                if let Some(w) = w.upgrade() {
+                    let w: &EventWaitInfo = w.as_ref();
+                    if w.matches(&e) {
+                        w.resolve(&e)?;
+                        consumed = true;
+                    }
+                }
+            }
+            if !consumed {
+                info!("Unhandled event: {e:?}");
+            }
+            // Cleanup stale waiters
+            let stale_waiter_indices = self
+                .wait_list
+                .iter()
+                .enumerate()
+                .rev()
+                .filter_map(|e| -> Option<usize> {
+                    if e.1.strong_count() == 0 {
+                        Some(e.0)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<usize>>();
+            for k in stale_waiter_indices {
+                self.wait_list.remove(k);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -514,6 +660,16 @@ impl PciXhciDriver {
         );
         info!("xHCI: op_regs.USBSTS = {}", xhc.op_regs.as_ref().usbsts());
         info!("xHCI: rt_regs.MFINDEX = {}", xhc.rt_regs.as_ref().mfindex());
+        let xhc = Rc::new(xhc);
+        {
+            let xhc = xhc.clone();
+            spawn_global(async move {
+                loop {
+                    xhc.primary_event_ring.lock().poll().await?;
+                    yield_execution().await;
+                }
+            });
+        }
         Ok(())
     }
 
