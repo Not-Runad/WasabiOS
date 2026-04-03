@@ -595,6 +595,53 @@ impl PortScEntry {
         let portsc = self.ptr.lock();
         unsafe { read_volatile(*portsc) }
     }
+
+    fn bit(&self, pos: usize) -> bool {
+        (self.value() & (1 << pos)) != 0
+    }
+
+    fn assert_bit(&self, pos: usize) {
+        const PRESERVE_MASK: u32 = 0b0100_1111_0000_0001_1111_1111_1110_1001;
+        let portsc = self.ptr.lock();
+        let old = unsafe { read_volatile(*portsc) };
+        unsafe { write_volatile(*portsc, (old & PRESERVE_MASK) | (1 << pos)) }
+    }
+
+    fn ccs(&self) -> bool {
+        // CCS - Current Connect Status - ROS
+        self.bit(0)
+    }
+
+    fn pp(&self) -> bool {
+        // PP - Port Power - RWS
+        self.bit(9)
+    }
+    
+    fn assert_pp(&self) {
+        // PP - Port Power - RWS
+        self.assert_bit(9);
+    }
+
+    pub fn pr(&self) -> bool {
+        // PR - Port Reset - RW1S
+        self.bit(4)
+    }
+
+    pub fn assert_pr(&self) {
+        // PR - Port Reset - RW1S
+        self.assert_bit(4);
+    }
+
+    pub async fn reset_port(&self) {
+        self.assert_pp();
+        while !self.pp() {
+            yield_execution().await
+        }
+        self.assert_pr();
+        while self.pr() {
+            yield_execution().await
+        }
+    }
 }
 
 /// Interface to access PORTSC registers
@@ -712,9 +759,13 @@ impl PciXhciDriver {
         info!("xHCI: op_regs.USBSTS = {}", xhc.regs.op_regs.as_ref().usbsts());
         info!("xHCI: rt_regs.MFINDEX = {}", xhc.regs.rt_regs.as_ref().mfindex());
         info!("PORTSC values for port {:?}", xhc.regs.portsc.port_range());
+        let mut connected_port = None;
         for port in xhc.regs.portsc.port_range() {
             if let Some(e) = xhc.regs.portsc.get(port) {
-                info!("  {port:3}: {:#010X}", e.value())
+                info!("  {port:3}: {:#010X}", e.value());
+                if e.ccs() {
+                    connected_port = Some(port)
+                }
             }
         }
         let xhc = Rc::new(xhc);
@@ -726,6 +777,14 @@ impl PciXhciDriver {
                     yield_execution().await;
                 }
             });
+        }
+        if let Some(port) = connected_port {
+            info!("xHCI: Port {port} is connected.");
+            if let Some(portsc) = xhc.regs.portsc.get(port) {
+                info!("xHCI: Resetting port {port}.");
+                portsc.reset_port().await;
+                info!("xHCI: Port {port} has been reset.");
+            }
         }
         Ok(())
     }
