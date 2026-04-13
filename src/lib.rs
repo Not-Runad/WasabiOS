@@ -27,6 +27,7 @@ pub mod uefi;
 pub mod volatile;
 pub mod x86;
 pub mod xhci;
+pub mod pin;
 
 #[cfg(test)]
 pub mod test_runner;
